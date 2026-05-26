@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LetterLock</title>
+    <link rel="stylesheet" href="styles.css?v=7">
+  </head>
+  <body>
+    <canvas id="confetti" class="confetti" aria-hidden="true"></canvas>
+
+    <header class="topbar">
+      <button class="icon-button" id="help-button" type="button" aria-label="查看规则" title="查看规则">?</button>
+      <div class="brand">
+        <h1>LetterLock</h1>
+      </div>
+      <div class="top-actions">
+        <button class="icon-button" id="stats-button" type="button" aria-label="查看统计" title="查看统计">▥</button>
+        <button class="icon-button" id="new-game-button" type="button" aria-label="重新开局" title="重新开局">↻</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="game-panel" aria-label="LetterLock 游戏区">
+        <div id="round-label" class="round-label">第 1 局</div>
+        <div id="board" class="board" aria-live="polite"></div>
+        <p id="message" class="message" role="status"></p>
+        <div id="keyboard" class="keyboard" aria-label="屏幕键盘"></div>
+      </section>
+
+      <section class="legend" aria-label="颜色说明">
+        <div class="legend-item">
+          <span class="legend-sample correct">A</span>
+          <div>
+            <strong>位置正确</strong>
+            <small>字母在答案中，且位置也对</small>
+          </div>
+        </div>
+        <div class="legend-item">
+          <span class="legend-sample present">A</span>
+          <div>
+            <strong>字母正确</strong>
+            <small>字母在答案中，但位置不对</small>
+          </div>
+        </div>
+        <div class="legend-item">
+          <span class="legend-sample absent">A</span>
+          <div>
+            <strong>本词没有</strong>
+            <small>答案里不包含这个字母</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="result-panel" id="result-panel" hidden>
+        <p id="answer-line"></p>
+        <button id="copy-button" type="button">复制结果</button>
+      </section>
+
+      <footer>
+        玩法参考 <a href="https://www.nytimes.com/games/wordle/index.html" target="_blank" rel="noreferrer">Wordle</a>
+      </footer>
+    </main>
+
+    <dialog id="help-dialog">
+      <div class="dialog-card">
+        <header>
+          <h2>规则</h2>
+          <button class="icon-button" id="close-help-button" type="button" aria-label="关闭规则" title="关闭">×</button>
+        </header>
+        <p>每次输入一个五个字母的英文单词。可以使用实体键盘，也可以点下方屏幕键盘。</p>
+        <p>绿色表示字母和位置都正确；黄色表示答案包含这个字母但位置不同；灰色表示答案里没有这个字母。</p>
+        <p>每局最多猜 10 次。右上角按钮会随机换一个新词。</p>
+      </div>
+    </dialog>
+
+    <dialog id="stats-dialog">
+      <div class="dialog-card stats-card">
+        <header>
+          <h2>统计</h2>
+          <button class="icon-button" id="close-stats-button" type="button" aria-label="关闭统计" title="关闭">×</button>
+        </header>
+        <div class="stats-summary" aria-label="累计统计">
+          <div class="stat-box">
+            <strong id="stats-total">0</strong>
+            <span>总局数</span>
+          </div>
+          <div class="stat-box">
+            <strong id="stats-wins">0</strong>
+            <span>猜对</span>
+          </div>
+          <div class="stat-box">
+            <strong id="stats-losses">0</strong>
+            <span>猜错</span>
+          </div>
+          <div class="stat-box">
+            <strong id="stats-abandoned">0</strong>
+            <span>未完成</span>
+          </div>
+          <div class="stat-box">
+            <strong id="stats-win-rate">0%</strong>
+            <span>胜率</span>
+          </div>
+          <div class="stat-box">
+            <strong id="stats-average">-</strong>
+            <span>平均步数</span>
+          </div>
+        </div>
+        <section class="distribution" aria-label="猜对步数分布">
+          <h3>猜对步数分布</h3>
+          <div id="guess-distribution" class="distribution-bars"></div>
+          <p id="stats-empty" class="stats-empty">猜对一局后这里会开始记录分布。</p>
+        </section>
+      </div>
+    </dialog>
+
+    <script src="dictionary.js?v=6"></script>
+    <script src="game.js?v=10"></script>
+  </body>
+</html>
