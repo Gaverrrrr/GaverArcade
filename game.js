@@ -1,5 +1,6 @@
 const WORD_LENGTH = 5;
 const MAX_ATTEMPTS = 10;
+const DAILY_MAX_ATTEMPTS = 6;
 const MIN_VISIBLE_ROWS = 6;
 const STATUS = {
   correct: "correct",
@@ -13,13 +14,29 @@ const STATUS_RANK = {
 };
 const KEYBOARD_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const STATS_STORAGE_KEY = "letterlock.stats.v1";
-const STATS_SCHEMA_VERSION = 2;
+const MODE_STORAGE_KEY = "letterlock.mode.v1";
+const DAILY_SESSION_STORAGE_KEY = "letterlock.dailySession.v1";
+const STATS_SCHEMA_VERSION = 3;
 const LEGACY_COMPLETED_ROUNDS_FOR_CORRECTION = 24;
 const LEGACY_ABANDONED_ROUND_CORRECTION = 3;
 const EASTER_EGG_WORD = "gaver";
 const CONFETTI_DURATION = 4200;
 const CONFETTI_PIECES = 120;
+const UNLOCK_EFFECT_DURATION = 1750;
+const UNLOCK_CONFETTI_DELAY = 240;
+const UNLOCK_CONFETTI_FALLBACK_COUNT = 150;
+const UNLOCK_CONFETTI_BURST_COUNT = 170;
 const CONFETTI_COLORS = ["#3f7a3f", "#9a842f", "#d4ad32", "#d65a3a", "#429a92", "#7163d7", "#d66798"];
+const UNLOCK_CONFETTI_COLORS = ["#ffd166", "#5bd88f", "#4ecbff", "#ff6f9e", "#9d8cff", "#ffffff"];
+const GAME_MODES = {
+  daily: "daily",
+  practice: "practice",
+};
+const DAILY_ANSWER_OVERRIDES = {
+  "2026-05-27": "plant",
+};
+const DAILY_EPOCH = new Date(2024, 0, 1);
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_WORDS = [
   "about",
   "adore",
@@ -99,10 +116,16 @@ const els = {
   answerLine: document.querySelector("#answer-line"),
   copyButton: document.querySelector("#copy-button"),
   confetti: document.querySelector("#confetti"),
+  unlockEffect: document.querySelector("#unlock-effect"),
+  modeButtons: document.querySelectorAll("[data-mode]"),
+  statsModeButtons: document.querySelectorAll("[data-stats-mode]"),
 };
 
 const state = {
+  mode: loadMode(),
+  activeStatsMode: GAME_MODES.daily,
   round: 0,
+  dailyKey: getDailyKey(),
   answer: "",
   guesses: [],
   currentGuess: "",
@@ -111,28 +134,73 @@ const state = {
   solved: false,
   gameOver: false,
   abandonedRecorded: false,
+  nextPracticeRoundPrepared: false,
+  modeSessions: {},
   stats: loadStats(),
   lastAnswer: "",
 };
 
 let confettiAnimation = 0;
+let unlockStartTimer = 0;
+let unlockHideTimer = 0;
+let unlockConfettiTimer = 0;
 
-startGame();
+loadInitialGame();
 
 document.addEventListener("keydown", handlePhysicalKey);
 els.keyboard.addEventListener("click", handleKeyboardClick);
-els.newGameButton.addEventListener("click", () => startGame());
+els.newGameButton.addEventListener("click", handleNewGameButton);
 els.helpButton.addEventListener("click", () => els.helpDialog.showModal());
 els.closeHelpButton.addEventListener("click", () => els.helpDialog.close());
 els.statsButton.addEventListener("click", openStatsDialog);
 els.closeStatsButton.addEventListener("click", () => els.statsDialog.close());
 els.copyButton.addEventListener("click", copyResult);
+els.modeButtons.forEach((button) => {
+  button.addEventListener("click", () => switchMode(button.dataset.mode));
+});
+els.statsModeButtons.forEach((button) => {
+  button.addEventListener("click", () => switchStatsMode(button.dataset.statsMode));
+});
 window.addEventListener("beforeunload", recordAbandonedRound);
 
-function startGame() {
-  recordAbandonedRound();
-  state.round += 1;
-  state.answer = pickAnswer(state.lastAnswer);
+function loadInitialGame() {
+  if (!restoreModeSession(state.mode)) {
+    startGame({ skipAbandonedRecord: true });
+  }
+}
+
+function handleNewGameButton() {
+  if (state.mode === GAME_MODES.daily) {
+    setMessage(
+      state.gameOver
+        ? "今日挑战已完成，猜测过程会保留。"
+        : "每日挑战每天固定一个答案，当前进度会保留。",
+      state.gameOver ? "success" : "",
+    );
+    return;
+  }
+
+  startGame();
+}
+
+function startGame(options = {}) {
+  if (!options.skipAbandonedRecord) {
+    recordAbandonedRound();
+  }
+  clearUnlockEffect();
+  const shouldAdvancePracticeRound =
+    state.mode === GAME_MODES.practice && (options.advancePracticeRound ?? true);
+  if (shouldAdvancePracticeRound) {
+    state.round += 1;
+  }
+  if (state.mode === GAME_MODES.practice && state.round === 0) {
+    state.round = 1;
+  }
+  if (state.mode === GAME_MODES.daily) {
+    state.round = 0;
+  }
+  state.dailyKey = getDailyKey();
+  state.answer = pickAnswer(state.mode, state.lastAnswer);
   state.lastAnswer = state.answer;
   state.guesses = [];
   state.currentGuess = "";
@@ -141,9 +209,11 @@ function startGame() {
   state.solved = false;
   state.gameOver = false;
   state.abandonedRecorded = false;
-  els.resultPanel.hidden = true;
+  state.nextPracticeRoundPrepared = false;
+  syncResultPanel();
   setMessage("");
   render();
+  saveCurrentSession();
 }
 
 function handlePhysicalKey(event) {
@@ -169,7 +239,7 @@ function handleKeyboardClick(event) {
 function handleKey(key) {
   if (state.gameOver) {
     setMessage(
-      state.solved ? "这一局已经答对了。点右上角可以换一个新词。" : "这一局已经结束。点右上角可以换一个新词。",
+      state.solved ? `这一局已经答对了。${getRestartHint()}` : `这一局已经结束。${getRestartHint()}`,
       state.solved ? "success" : "error",
     );
     return;
@@ -183,17 +253,20 @@ function handleKey(key) {
   if (key === "backspace") {
     state.currentGuess = state.currentGuess.slice(0, -1);
     render();
+    saveCurrentSession();
     return;
   }
 
   if (/^[a-z]$/.test(key) && state.currentGuess.length < WORD_LENGTH) {
     state.currentGuess += key;
     render();
+    saveCurrentSession();
   }
 }
 
 function submitGuess() {
   const guess = state.currentGuess;
+  const attemptLimit = getAttemptLimit();
   if (guess.length !== WORD_LENGTH) {
     setMessage("需要刚好 5 个字母。", "error");
     return;
@@ -204,9 +277,7 @@ function submitGuess() {
     return;
   }
 
-  if (guess === EASTER_EGG_WORD) {
-    triggerConfetti();
-  }
+  const shouldUnlock = guess === EASTER_EGG_WORD;
 
   const evaluation = evaluateGuess(guess, state.answer);
   state.guesses.push({ word: guess, evaluation });
@@ -221,32 +292,70 @@ function submitGuess() {
     els.resultPanel.hidden = false;
     els.answerLine.textContent = `答案：${state.answer.toUpperCase()}，用了 ${state.guesses.length} 次。`;
     setMessage(`命中！用了 ${state.guesses.length} 次。`, "success");
-  } else if (state.guesses.length >= MAX_ATTEMPTS) {
+  } else if (state.guesses.length >= attemptLimit) {
     state.gameOver = true;
     recordGameResult(false);
     els.resultPanel.hidden = false;
     els.answerLine.textContent = `答案：${state.answer.toUpperCase()}。`;
-    setMessage(`第 ${MAX_ATTEMPTS} 次还没中，本局结束。`, "error");
+    setMessage(`第 ${attemptLimit} 次还没中，本局结束。`, "error");
   } else {
-    const triesLeft = MAX_ATTEMPTS - state.guesses.length;
+    const triesLeft = attemptLimit - state.guesses.length;
     setMessage(triesLeft <= 5 ? `还剩 ${triesLeft} 次。` : "");
   }
 
   render();
   state.revealingGuessIndex = -1;
+  saveCurrentSession();
+  if (shouldUnlock) {
+    unlockStartTimer = window.setTimeout(triggerGaverUnlock, 900);
+  }
 }
 
 function render() {
-  els.roundLabel.textContent = `第 ${state.round} 局`;
+  renderMode();
   renderBoard();
   renderKeyboard();
 }
 
+function renderMode() {
+  els.roundLabel.textContent =
+    state.mode === GAME_MODES.daily
+      ? `每日挑战 · ${formatDailyLabel(state.dailyKey)}`
+      : `练习模式 · 第 ${getPracticeDisplayRound()} 局`;
+  els.newGameButton.setAttribute(
+    "aria-label",
+    state.mode === GAME_MODES.daily ? "保留今日挑战" : "换一个练习词",
+  );
+  els.newGameButton.setAttribute(
+    "title",
+    state.mode === GAME_MODES.daily ? "保留今日挑战" : "换一个练习词",
+  );
+  els.modeButtons.forEach((button) => {
+    const selected = button.dataset.mode === state.mode;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
+}
+
+function syncResultPanel() {
+  if (!state.gameOver) {
+    els.resultPanel.hidden = true;
+    els.answerLine.textContent = "";
+    return;
+  }
+
+  els.resultPanel.hidden = false;
+  els.answerLine.textContent = state.solved
+    ? `答案：${state.answer.toUpperCase()}，用了 ${state.guesses.length} 次。`
+    : `答案：${state.answer.toUpperCase()}。`;
+}
+
 function renderBoard() {
   els.board.innerHTML = "";
+  const attemptLimit = getAttemptLimit();
   const rowCount = Math.max(
     MIN_VISIBLE_ROWS,
-    Math.min(MAX_ATTEMPTS, state.guesses.length + (state.gameOver ? 0 : 1)),
+    Math.min(attemptLimit, state.guesses.length + (state.gameOver ? 0 : 1)),
   );
 
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
@@ -302,17 +411,22 @@ function renderKeyboard() {
 
   KEYBOARD_ROWS.forEach((letters, rowIndex) => {
     const row = document.createElement("div");
-    row.className = "keyboard-row";
+    row.className = ["keyboard-row", `keyboard-row-${rowIndex + 1}`].join(" ");
 
-    if (rowIndex === 2) {
-      row.append(createKey("enter", "ENTER", true));
+    if (rowIndex === 1) {
+      row.append(createKeyboardSpacer("half"));
     }
 
     Array.from(letters).forEach((letter) => {
       row.append(createKey(letter, letter, false));
     });
 
+    if (rowIndex === 1) {
+      row.append(createKeyboardSpacer("half"));
+    }
+
     if (rowIndex === 2) {
+      row.prepend(createKey("enter", "ENTER", true));
       row.append(createKey("backspace", "⌫", true, "删除"));
     }
 
@@ -321,18 +435,26 @@ function renderKeyboard() {
 }
 
 function openStatsDialog() {
+  state.activeStatsMode = state.mode;
   renderStats();
   els.statsDialog.showModal();
 }
 
 function renderStats() {
-  const { wins, losses, abandoned, distribution } = state.stats;
+  const stats = getStatsForMode(state.activeStatsMode);
+  const { wins, losses, abandoned, distribution } = stats;
+  const attemptLimit = getAttemptLimit(state.activeStatsMode);
   const completed = wins + losses;
   const total = completed + abandoned;
   const totalWinGuesses = distribution.reduce((sum, count, index) => sum + count * index, 0);
   const average = wins ? totalWinGuesses / wins : 0;
-  const maxBucket = Math.max(1, ...distribution.slice(1));
+  const maxBucket = Math.max(1, ...distribution.slice(1, attemptLimit + 1));
 
+  els.statsModeButtons.forEach((button) => {
+    const selected = button.dataset.statsMode === state.activeStatsMode;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
   els.statsTotal.textContent = total.toLocaleString("en-US");
   els.statsWins.textContent = wins.toLocaleString("en-US");
   els.statsLosses.textContent = losses.toLocaleString("en-US");
@@ -342,7 +464,7 @@ function renderStats() {
   els.statsEmpty.hidden = wins > 0;
   els.guessDistribution.innerHTML = "";
 
-  for (let guessCount = 1; guessCount <= MAX_ATTEMPTS; guessCount += 1) {
+  for (let guessCount = 1; guessCount <= attemptLimit; guessCount += 1) {
     const count = distribution[guessCount] || 0;
     const barRow = document.createElement("div");
     barRow.className = "distribution-row";
@@ -370,12 +492,13 @@ function renderStats() {
 }
 
 function recordGameResult(won) {
+  const stats = getStatsForMode(state.mode);
   state.abandonedRecorded = true;
   if (won) {
-    state.stats.wins += 1;
-    state.stats.distribution[state.guesses.length] += 1;
+    stats.wins += 1;
+    stats.distribution[state.guesses.length] += 1;
   } else {
-    state.stats.losses += 1;
+    stats.losses += 1;
   }
   saveStats(state.stats);
   renderStats();
@@ -386,9 +509,10 @@ function recordAbandonedRound() {
     return;
   }
 
-  state.stats.abandoned += 1;
+  getStatsForMode(state.mode).abandoned += 1;
   state.abandonedRecorded = true;
   saveStats(state.stats);
+  saveCurrentSession();
 }
 
 function createKey(key, label, wide, ariaLabel = label) {
@@ -401,6 +525,13 @@ function createKey(key, label, wide, ariaLabel = label) {
   button.textContent = label;
   button.setAttribute("aria-label", ariaLabel);
   return button;
+}
+
+function createKeyboardSpacer(size = "") {
+  const spacer = document.createElement("span");
+  spacer.className = ["key-spacer", size ? `key-spacer-${size}` : ""].filter(Boolean).join(" ");
+  spacer.setAttribute("aria-hidden", "true");
+  return spacer;
 }
 
 function evaluateGuess(guess, answer) {
@@ -443,18 +574,236 @@ function updateKeyStatuses(guess, evaluation) {
 
 function statusLabel(status) {
   if (status === STATUS.correct) {
-    return "位置正确";
+    return "字母和位置正确";
   }
   if (status === STATUS.present) {
     return "字母正确但位置不对";
   }
-  return "答案里没有";
+  return "本轮词语没有这个字母";
 }
 
-function pickAnswer(previousAnswer) {
+function saveCurrentSession() {
+  const session = captureSession();
+  state.modeSessions[state.mode] = session;
+  if (state.mode === GAME_MODES.daily) {
+    saveDailySession(session);
+  }
+}
+
+function captureSession() {
+  return {
+    mode: state.mode,
+    round: state.round,
+    dailyKey: state.dailyKey,
+    answer: state.answer,
+    guesses: state.guesses.map(({ word, evaluation }) => ({
+      word,
+      evaluation: evaluation.slice(),
+    })),
+    currentGuess: state.currentGuess,
+    solved: state.solved,
+    gameOver: state.gameOver,
+    abandonedRecorded: state.abandonedRecorded,
+    nextPracticeRoundPrepared: state.nextPracticeRoundPrepared,
+    lastAnswer: state.lastAnswer,
+  };
+}
+
+function restoreModeSession(mode) {
+  const sanitized = getRestorableSession(mode);
+  if (!sanitized) {
+    return false;
+  }
+
+  applySession(sanitized);
+  return true;
+}
+
+function applySession(session) {
+  state.mode = session.mode;
+  state.round = session.round;
+  state.dailyKey = session.dailyKey;
+  state.answer = session.answer;
+  state.guesses = session.guesses;
+  state.currentGuess = session.currentGuess;
+  state.keyStatuses = rebuildKeyStatuses(session.guesses);
+  state.revealingGuessIndex = -1;
+  state.solved = session.solved;
+  state.gameOver = session.gameOver;
+  state.abandonedRecorded = session.abandonedRecorded;
+  state.nextPracticeRoundPrepared = session.nextPracticeRoundPrepared;
+  state.lastAnswer = session.lastAnswer || session.answer;
+  syncResultPanel();
+  setMessage("");
+  render();
+  saveCurrentSession();
+}
+
+function getRestorableSession(mode) {
+  if (mode !== GAME_MODES.daily) {
+    return sanitizeSession(mode, state.modeSessions[mode]);
+  }
+
+  return choosePreferredSession(
+    sanitizeSession(mode, state.modeSessions[mode]),
+    sanitizeSession(mode, loadDailySession()),
+  );
+}
+
+function sanitizeSession(mode, source) {
+  if (!source || source.mode !== mode) {
+    return null;
+  }
+
+  const limit = getAttemptLimit(mode);
+  const dailyKey = mode === GAME_MODES.daily ? getDailyKey() : String(source.dailyKey || getDailyKey());
+  const rawAnswer = String(source.answer || "").trim().toLowerCase();
+  const expectedDailyAnswer = mode === GAME_MODES.daily ? pickAnswer(GAME_MODES.daily, "") : "";
+  const answer = mode === GAME_MODES.daily ? expectedDailyAnswer : rawAnswer;
+  if (!ANSWER_WORDS.includes(answer)) {
+    return null;
+  }
+  if (mode === GAME_MODES.daily && (source.dailyKey !== dailyKey || rawAnswer !== expectedDailyAnswer)) {
+    return null;
+  }
+
+  const guesses = Array.isArray(source.guesses)
+    ? source.guesses
+        .slice(0, limit)
+        .map((guess) => sanitizeGuessRecord(guess, answer))
+        .filter(Boolean)
+    : [];
+  const solved = guesses.some(({ word }) => word === answer);
+  const gameOver = Boolean(source.gameOver) || solved || guesses.length >= limit;
+  const currentGuess = gameOver ? "" : sanitizeCurrentGuess(source.currentGuess);
+  const round = mode === GAME_MODES.practice
+    ? Math.max(1, Number.isInteger(source.round) ? source.round : 1)
+    : 0;
+
+  return {
+    mode,
+    round,
+    dailyKey,
+    answer,
+    guesses,
+    currentGuess,
+    solved,
+    gameOver,
+    abandonedRecorded: Boolean(source.abandonedRecorded),
+    nextPracticeRoundPrepared: false,
+    lastAnswer: String(source.lastAnswer || answer).trim().toLowerCase(),
+  };
+}
+
+function sanitizeGuessRecord(guess, answer) {
+  const word = String(guess?.word || "").trim().toLowerCase();
+  if (!GUESS_SET.has(word) || !/^[a-z]{5}$/.test(word)) {
+    return null;
+  }
+
+  const evaluation = Array.isArray(guess?.evaluation) && guess.evaluation.length === WORD_LENGTH
+    ? guess.evaluation.map((status) =>
+        Object.values(STATUS).includes(status) ? status : STATUS.absent,
+      )
+    : evaluateGuess(word, answer);
+
+  return { word, evaluation };
+}
+
+function sanitizeCurrentGuess(value) {
+  const guess = String(value || "").trim().toLowerCase();
+  return /^[a-z]{0,5}$/.test(guess) ? guess : "";
+}
+
+function choosePreferredSession(left, right) {
+  if (!left) {
+    return right || null;
+  }
+  if (!right) {
+    return left;
+  }
+
+  return getSessionScore(right) > getSessionScore(left) ? right : left;
+}
+
+function getSessionScore(session) {
+  const completedBonus = session.gameOver ? 1000 : 0;
+  const solvedBonus = session.solved ? 100 : 0;
+  return completedBonus + solvedBonus + session.guesses.length * 10 + session.currentGuess.length;
+}
+
+function rebuildKeyStatuses(guesses) {
+  const keyStatuses = {};
+  guesses.forEach(({ word, evaluation }) => {
+    for (let index = 0; index < WORD_LENGTH; index += 1) {
+      const letter = word[index];
+      const nextStatus = evaluation[index];
+      const currentStatus = keyStatuses[letter];
+      if (!currentStatus || STATUS_RANK[nextStatus] > STATUS_RANK[currentStatus]) {
+        keyStatuses[letter] = nextStatus;
+      }
+    }
+  });
+  return keyStatuses;
+}
+
+function saveDailySession(session) {
+  try {
+    const preferred = choosePreferredSession(
+      sanitizeSession(GAME_MODES.daily, session),
+      sanitizeSession(GAME_MODES.daily, loadDailySession()),
+    );
+    if (preferred) {
+      state.modeSessions[GAME_MODES.daily] = preferred;
+      localStorage.setItem(DAILY_SESSION_STORAGE_KEY, JSON.stringify(preferred));
+    }
+  } catch {
+    // Daily progress should survive refresh when storage is available.
+  }
+}
+
+function loadDailySession() {
+  try {
+    return JSON.parse(localStorage.getItem(DAILY_SESSION_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function switchMode(nextMode) {
+  if (!Object.values(GAME_MODES).includes(nextMode) || nextMode === state.mode) {
+    return;
+  }
+
+  saveCurrentSession();
+  state.mode = nextMode;
+  saveMode(nextMode);
+  if (!restoreModeSession(nextMode)) {
+    startGame({ advancePracticeRound: false, skipAbandonedRecord: true });
+  }
+}
+
+function switchStatsMode(nextMode) {
+  if (!Object.values(GAME_MODES).includes(nextMode)) {
+    return;
+  }
+
+  state.activeStatsMode = nextMode;
+  renderStats();
+}
+
+function pickAnswer(mode, previousAnswer) {
   const bank = ANSWER_WORDS.length ? ANSWER_WORDS : FALLBACK_WORDS;
   if (bank.length === 1) {
     return bank[0];
+  }
+
+  if (mode === GAME_MODES.daily) {
+    const dailyOverride = getDailyOverride(bank);
+    if (dailyOverride) {
+      return dailyOverride;
+    }
+    return bank[getDailyIndex(bank.length)];
   }
 
   let candidate = bank[randomIndex(bank.length)];
@@ -462,6 +811,72 @@ function pickAnswer(previousAnswer) {
     candidate = bank[randomIndex(bank.length)];
   }
   return candidate;
+}
+
+function getRestartHint() {
+  return state.mode === GAME_MODES.daily
+    ? "今日挑战会保留完整记录。"
+    : "点右上角可以换一个练习词。";
+}
+
+function loadMode() {
+  try {
+    const savedMode = localStorage.getItem(MODE_STORAGE_KEY);
+    return Object.values(GAME_MODES).includes(savedMode) ? savedMode : GAME_MODES.daily;
+  } catch {
+    return GAME_MODES.daily;
+  }
+}
+
+function saveMode(mode) {
+  try {
+    localStorage.setItem(MODE_STORAGE_KEY, mode);
+  } catch {
+    // Mode persistence is nice to have; gameplay should continue if storage is blocked.
+  }
+}
+
+function getDailyKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getDailyIndex(length) {
+  const today = new Date();
+  const localMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const daysSinceEpoch = Math.floor((localMidnight - DAILY_EPOCH) / DAY_IN_MS);
+  return positiveModulo(daysSinceEpoch, length);
+}
+
+function getDailyOverride(bank) {
+  const override = DAILY_ANSWER_OVERRIDES[getDailyKey()];
+  return override && bank.includes(override) ? override : "";
+}
+
+function positiveModulo(value, divisor) {
+  return ((value % divisor) + divisor) % divisor;
+}
+
+function getAttemptLimit(mode = state.mode) {
+  return mode === GAME_MODES.daily ? DAILY_MAX_ATTEMPTS : MAX_ATTEMPTS;
+}
+
+function getPracticeDisplayRound() {
+  return Math.max(1, state.round || 1);
+}
+
+function getStatsForMode(mode) {
+  if (!state.stats.modes[mode]) {
+    state.stats.modes[mode] = createEmptyModeStats();
+  }
+  return state.stats.modes[mode];
+}
+
+function formatDailyLabel(key) {
+  const [, month, day] = key.split("-");
+  return `${month}.${day}`;
 }
 
 function randomIndex(max) {
@@ -473,7 +888,68 @@ function randomIndex(max) {
   return Math.floor(Math.random() * max);
 }
 
-function triggerConfetti() {
+function triggerGaverUnlock() {
+  const origin = getUnlockOrigin();
+  if (!els.unlockEffect) {
+    triggerConfetti({
+      mode: "burst",
+      count: UNLOCK_CONFETTI_FALLBACK_COUNT,
+      duration: 1700,
+      colors: UNLOCK_CONFETTI_COLORS,
+      origin,
+    });
+    return;
+  }
+
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  clearUnlockEffect();
+  setUnlockOrigin(origin);
+  void els.unlockEffect.offsetWidth;
+  void els.board.offsetWidth;
+  els.unlockEffect.classList.add("active");
+  els.board.classList.add("unlock-burst");
+  document.body.classList.add("unlocking");
+
+  unlockConfettiTimer = window.setTimeout(
+    () =>
+      triggerConfetti({
+        mode: "burst",
+        count: UNLOCK_CONFETTI_BURST_COUNT,
+        duration: 1700,
+        colors: UNLOCK_CONFETTI_COLORS,
+        origin,
+      }),
+    reducedMotion ? 120 : UNLOCK_CONFETTI_DELAY,
+  );
+  unlockHideTimer = window.setTimeout(
+    clearUnlockEffect,
+    reducedMotion ? 900 : UNLOCK_EFFECT_DURATION,
+  );
+}
+
+function clearUnlockEffect() {
+  window.clearTimeout(unlockStartTimer);
+  window.clearTimeout(unlockHideTimer);
+  window.clearTimeout(unlockConfettiTimer);
+  els.unlockEffect?.classList.remove("active");
+  els.board.classList.remove("unlock-burst");
+  document.body.classList.remove("unlocking");
+}
+
+function getUnlockOrigin() {
+  const rect = els.board.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  };
+}
+
+function setUnlockOrigin(origin) {
+  els.unlockEffect.style.setProperty("--unlock-x", `${origin.x}px`);
+  els.unlockEffect.style.setProperty("--unlock-y", `${origin.y}px`);
+}
+
+function triggerConfetti(options = {}) {
   const canvas = els.confetti;
   if (!canvas) {
     return;
@@ -488,9 +964,15 @@ function triggerConfetti() {
   const height = window.innerHeight;
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const duration = reducedMotion ? 1200 : CONFETTI_DURATION;
+  const duration = reducedMotion ? 1200 : options.duration || CONFETTI_DURATION;
   const startedAt = performance.now();
-  const pieces = createConfettiPieces(width, height, reducedMotion ? 42 : CONFETTI_PIECES);
+  const count = reducedMotion ? 32 : options.count || CONFETTI_PIECES;
+  const colors = options.colors || CONFETTI_COLORS;
+  const isBurst = options.mode === "burst";
+  const origin = options.origin || { x: width / 2, y: height * 0.42 };
+  const pieces = isBurst
+    ? createBurstConfettiPieces(width, height, count, colors, origin)
+    : createConfettiPieces(width, height, count, colors);
 
   cancelAnimationFrame(confettiAnimation);
   canvas.width = Math.floor(width * ratio);
@@ -505,7 +987,13 @@ function triggerConfetti() {
     const progress = Math.min((time - startedAt) / duration, 1);
     context.clearRect(0, 0, width, height);
 
-    pieces.forEach((piece) => drawConfettiPiece(context, piece, progress, height));
+    pieces.forEach((piece) => {
+      if (isBurst) {
+        drawBurstConfettiPiece(context, piece, progress);
+        return;
+      }
+      drawConfettiPiece(context, piece, progress, height);
+    });
 
     context.globalAlpha = 1;
 
@@ -521,7 +1009,7 @@ function triggerConfetti() {
   confettiAnimation = requestAnimationFrame(drawFrame);
 }
 
-function createConfettiPieces(width, height, count) {
+function createConfettiPieces(width, height, count, colors = CONFETTI_COLORS) {
   const pieces = [];
 
   for (let index = 0; index < count; index += 1) {
@@ -530,7 +1018,7 @@ function createConfettiPieces(width, height, count) {
       alpha: randomFloat(0.62, 0.95),
       bob: randomFloat(5, 18),
       bend: randomFloat(-2.8, 2.8),
-      color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+      color: colors[index % colors.length],
       delay: laneProgress * 0.42 + randomFloat(-0.025, 0.025),
       drift: randomFloat(-44, 44),
       endOffset: randomFloat(20, 150),
@@ -548,6 +1036,59 @@ function createConfettiPieces(width, height, count) {
   }
 
   return pieces;
+}
+
+function createBurstConfettiPieces(width, height, count, colors, origin) {
+  const pieces = [];
+  const reach = Math.min(Math.max(width, height) * 0.54, 560);
+
+  for (let index = 0; index < count; index += 1) {
+    const angle = (Math.PI * 2 * index) / count + randomFloat(-0.22, 0.22);
+    const speed = randomFloat(reach * 0.34, reach);
+    pieces.push({
+      alpha: randomFloat(0.7, 1),
+      angle,
+      bend: randomFloat(-3.4, 3.4),
+      color: colors[index % colors.length],
+      delay: randomFloat(0, 0.12),
+      gravity: randomFloat(height * 0.09, height * 0.18),
+      length: randomFloat(9, 20),
+      originX: origin.x,
+      originY: origin.y,
+      phase: randomFloat(0, Math.PI * 2),
+      spin: randomFloat(-2.8, 2.8),
+      speed,
+      width: randomFloat(4, 7),
+    });
+  }
+
+  return pieces;
+}
+
+function drawBurstConfettiPiece(context, piece, progress) {
+  const localProgress = clamp((progress - piece.delay) / (1 - piece.delay), 0, 1);
+  if (localProgress <= 0) {
+    return;
+  }
+
+  const launch = 1 - (1 - localProgress) ** 2.6;
+  const settle = localProgress ** 2;
+  const flutter = Math.sin(localProgress * Math.PI * 5.2 + piece.phase);
+  const flip = 0.28 + Math.abs(Math.cos(localProgress * Math.PI * 6.5 + piece.phase)) * 0.88;
+  const driftX = Math.cos(piece.angle) * piece.speed * launch;
+  const driftY = Math.sin(piece.angle) * piece.speed * launch + piece.gravity * settle;
+  const x = piece.originX + driftX + flutter * 10;
+  const y = piece.originY + driftY + Math.cos(localProgress * Math.PI * 3 + piece.phase) * 8;
+  const rotation = piece.angle + Math.PI / 2 + piece.spin * localProgress * Math.PI + flutter * 0.42;
+  const fadeIn = clamp(localProgress / 0.08, 0, 1);
+  const fadeOut = 1 - clamp((localProgress - 0.58) / 0.42, 0, 1);
+
+  context.save();
+  context.translate(x, y);
+  context.rotate(rotation);
+  context.globalAlpha = piece.alpha * fadeIn * fadeOut;
+  drawConfettiRibbon(context, piece, flip, piece.bend + flutter * piece.width * 0.45);
+  context.restore();
 }
 
 function drawConfettiPiece(context, piece, progress, height) {
@@ -622,9 +1163,8 @@ function normalizeWordList(source) {
     .sort((left, right) => left.localeCompare(right, "en-US"));
 }
 
-function createEmptyStats() {
+function createEmptyModeStats() {
   return {
-    schemaVersion: STATS_SCHEMA_VERSION,
     wins: 0,
     losses: 0,
     abandoned: 0,
@@ -632,33 +1172,57 @@ function createEmptyStats() {
   };
 }
 
+function createEmptyStats() {
+  return {
+    schemaVersion: STATS_SCHEMA_VERSION,
+    modes: {
+      [GAME_MODES.daily]: createEmptyModeStats(),
+      [GAME_MODES.practice]: createEmptyModeStats(),
+    },
+  };
+}
+
 function loadStats() {
   try {
     const saved = JSON.parse(localStorage.getItem(STATS_STORAGE_KEY));
     const stats = createEmptyStats();
-    stats.wins = Number.isInteger(saved?.wins) && saved.wins > 0 ? saved.wins : 0;
-    stats.losses = Number.isInteger(saved?.losses) && saved.losses > 0 ? saved.losses : 0;
-    stats.abandoned = Number.isInteger(saved?.abandoned) && saved.abandoned > 0 ? saved.abandoned : 0;
-    if (Array.isArray(saved?.distribution)) {
-      for (let index = 1; index <= MAX_ATTEMPTS; index += 1) {
-        const count = saved.distribution[index];
-        stats.distribution[index] = Number.isInteger(count) && count > 0 ? count : 0;
-      }
+
+    if (saved?.modes) {
+      stats.modes[GAME_MODES.daily] = sanitizeModeStats(saved.modes[GAME_MODES.daily]);
+      stats.modes[GAME_MODES.practice] = sanitizeModeStats(saved.modes[GAME_MODES.practice]);
+    } else if (saved) {
+      stats.modes[GAME_MODES.practice] = sanitizeModeStats(saved, true);
     }
-    if (
-      saved &&
-      saved.schemaVersion !== STATS_SCHEMA_VERSION &&
-      !Number.isInteger(saved.abandoned) &&
-      stats.wins + stats.losses === LEGACY_COMPLETED_ROUNDS_FOR_CORRECTION
-    ) {
-      stats.abandoned = LEGACY_ABANDONED_ROUND_CORRECTION;
-    }
-    stats.schemaVersion = STATS_SCHEMA_VERSION;
+
     localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(stats));
     return stats;
   } catch {
     return createEmptyStats();
   }
+}
+
+function sanitizeModeStats(source, applyLegacyCorrection = false) {
+  const stats = createEmptyModeStats();
+  stats.wins = Number.isInteger(source?.wins) && source.wins > 0 ? source.wins : 0;
+  stats.losses = Number.isInteger(source?.losses) && source.losses > 0 ? source.losses : 0;
+  stats.abandoned = Number.isInteger(source?.abandoned) && source.abandoned > 0 ? source.abandoned : 0;
+
+  if (Array.isArray(source?.distribution)) {
+    for (let index = 1; index <= MAX_ATTEMPTS; index += 1) {
+      const count = source.distribution[index];
+      stats.distribution[index] = Number.isInteger(count) && count > 0 ? count : 0;
+    }
+  }
+
+  if (
+    applyLegacyCorrection &&
+    !Number.isInteger(source?.abandoned) &&
+    stats.wins + stats.losses === LEGACY_COMPLETED_ROUNDS_FOR_CORRECTION
+  ) {
+    stats.abandoned = LEGACY_ABANDONED_ROUND_CORRECTION;
+  }
+
+  return stats;
 }
 
 function saveStats(stats) {
@@ -675,6 +1239,7 @@ function setMessage(text, type = "") {
 }
 
 function createShareText() {
+  const attemptLimit = getAttemptLimit();
   const rows = state.guesses
     .map(({ evaluation }) =>
       evaluation
@@ -691,7 +1256,12 @@ function createShareText() {
     )
     .join("\n");
 
-  return `LetterLock ${state.guesses.length}/${MAX_ATTEMPTS}\n${rows}\n答案：${state.answer.toUpperCase()}`;
+  const modeLine =
+    state.mode === GAME_MODES.daily
+      ? `每日挑战 ${state.dailyKey}`
+      : `练习模式 第 ${state.round} 局`;
+
+  return `LetterLock ${modeLine} ${state.guesses.length}/${attemptLimit}\n${rows}\n答案：${state.answer.toUpperCase()}`;
 }
 
 async function copyResult() {

@@ -4,10 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LetterLock</title>
-    <link rel="stylesheet" href="styles.css?v=7">
+    <link rel="stylesheet" href="styles.css?v=20">
   </head>
   <body>
     <canvas id="confetti" class="confetti" aria-hidden="true"></canvas>
+    <div id="unlock-effect" class="unlock-effect" aria-hidden="true">
+      <div class="unlock-backdrop"></div>
+      <div class="unlock-ring"></div>
+      <div class="unlock-label">BRAVO!</div>
+    </div>
 
     <header class="topbar">
       <button class="icon-button" id="help-button" type="button" aria-label="查看规则" title="查看规则">?</button>
@@ -22,6 +27,10 @@
 
     <main class="shell">
       <section class="game-panel" aria-label="LetterLock 游戏区">
+        <div class="mode-switch" role="group" aria-label="游戏模式">
+          <button class="mode-button" type="button" data-mode="daily">每日挑战</button>
+          <button class="mode-button" type="button" data-mode="practice">练习模式</button>
+        </div>
         <div id="round-label" class="round-label">第 1 局</div>
         <div id="board" class="board" aria-live="polite"></div>
         <p id="message" class="message" role="status"></p>
@@ -32,22 +41,22 @@
         <div class="legend-item">
           <span class="legend-sample correct">A</span>
           <div>
-            <strong>位置正确</strong>
-            <small>字母在答案中，且位置也对</small>
+            <strong>字母位置都对</strong>
+            <small>这个字母在本轮词语中，且位置正确</small>
           </div>
         </div>
         <div class="legend-item">
           <span class="legend-sample present">A</span>
           <div>
-            <strong>字母正确</strong>
-            <small>字母在答案中，但位置不对</small>
+            <strong>字母对位置错</strong>
+            <small>这个字母在本轮词语中，但位置不对</small>
           </div>
         </div>
         <div class="legend-item">
           <span class="legend-sample absent">A</span>
           <div>
-            <strong>本词没有</strong>
-            <small>答案里不包含这个字母</small>
+            <strong>答案没有此字母</strong>
+            <small>本轮词语不包含这个字母</small>
           </div>
         </div>
       </section>
@@ -68,9 +77,10 @@
           <h2>规则</h2>
           <button class="icon-button" id="close-help-button" type="button" aria-label="关闭规则" title="关闭">×</button>
         </header>
-        <p>每次输入一个五个字母的英文单词。可以使用实体键盘，也可以点下方屏幕键盘。</p>
-        <p>绿色表示字母和位置都正确；黄色表示答案包含这个字母但位置不同；灰色表示答案里没有这个字母。</p>
-        <p>每局最多猜 10 次。右上角按钮会随机换一个新词。</p>
+        <p>目标是猜出一个五个字母的英文单词。每次提交必须是词库里的五字母单词。</p>
+        <p>输入 5 个字母后，按实体键盘 Enter，或点击下方键盘上的 ENTER 提交。</p>
+        <p>每日挑战每天固定一个答案，最多猜 6 次；练习模式每局随机一个答案，最多猜 10 次，可以随时换题。</p>
+        <p>提交后每个格子会翻开给出颜色：绿色表示这个字母在本轮词语中，且位置正确；黄色表示这个字母在本轮词语中，但位置不对；灰色表示本轮词语不包含这个字母。</p>
       </div>
     </dialog>
 
@@ -80,6 +90,10 @@
           <h2>统计</h2>
           <button class="icon-button" id="close-stats-button" type="button" aria-label="关闭统计" title="关闭">×</button>
         </header>
+        <div class="stats-mode-switch mode-switch" role="group" aria-label="统计模式">
+          <button class="mode-button" type="button" data-stats-mode="daily">每日挑战</button>
+          <button class="mode-button" type="button" data-stats-mode="practice">练习模式</button>
+        </div>
         <div class="stats-summary" aria-label="累计统计">
           <div class="stat-box">
             <strong id="stats-total">0</strong>
@@ -115,6 +129,6 @@
     </dialog>
 
     <script src="dictionary.js?v=6"></script>
-    <script src="game.js?v=10"></script>
+    <script src="game.js?v=30"></script>
   </body>
 </html>
