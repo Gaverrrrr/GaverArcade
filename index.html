@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LetterLock</title>
-    <link rel="stylesheet" href="styles.css?v=20">
+    <link rel="stylesheet" href="styles.css?v=32">
   </head>
   <body>
     <canvas id="confetti" class="confetti" aria-hidden="true"></canvas>
@@ -63,7 +63,23 @@
 
       <section class="result-panel" id="result-panel" hidden>
         <p id="answer-line"></p>
-        <button id="copy-button" type="button">复制结果</button>
+        <div class="word-info" id="word-info" hidden>
+          <div class="word-info-head">
+            <strong id="word-info-word"></strong>
+            <span id="word-info-level"></span>
+          </div>
+          <dl>
+            <div>
+              <dt>英文释义</dt>
+              <dd id="word-info-en"></dd>
+            </div>
+            <div>
+              <dt>中文含义</dt>
+              <dd id="word-info-zh"></dd>
+            </div>
+          </dl>
+        </div>
+        <button id="copy-button" type="button">分享结果</button>
       </section>
 
       <footer>
@@ -108,10 +124,6 @@
             <span>猜错</span>
           </div>
           <div class="stat-box">
-            <strong id="stats-abandoned">0</strong>
-            <span>未完成</span>
-          </div>
-          <div class="stat-box">
             <strong id="stats-win-rate">0%</strong>
             <span>胜率</span>
           </div>
@@ -125,10 +137,30 @@
           <div id="guess-distribution" class="distribution-bars"></div>
           <p id="stats-empty" class="stats-empty">猜对一局后这里会开始记录分布。</p>
         </section>
+        <button id="reset-records-button" class="reset-records-button" type="button">清空本机记录</button>
       </div>
     </dialog>
 
-    <script src="dictionary.js?v=6"></script>
-    <script src="game.js?v=30"></script>
+    <dialog id="share-dialog">
+      <div class="dialog-card share-card">
+        <header>
+          <h2>分享结果</h2>
+          <button class="icon-button" id="close-share-button" type="button" aria-label="关闭分享" title="关闭">×</button>
+        </header>
+        <div class="share-preview" aria-label="分享预览">
+          <div class="share-brand">LetterLock</div>
+          <p id="share-meta" class="share-meta"></p>
+          <strong id="share-score" class="share-score"></strong>
+          <div id="share-grid" class="share-grid" aria-hidden="true"></div>
+          <p class="share-note">不包含答案</p>
+        </div>
+        <button id="share-copy-button" class="share-copy-button" type="button">复制分享文案</button>
+        <p id="share-copy-status" class="share-copy-status" aria-live="polite"></p>
+      </div>
+    </dialog>
+
+    <script src="dictionary.js?v=7"></script>
+    <script src="word-info.js?v=1"></script>
+    <script src="game.js?v=47"></script>
   </body>
 </html>

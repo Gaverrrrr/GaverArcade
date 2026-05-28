@@ -14,11 +14,9 @@ const STATUS_RANK = {
 };
 const KEYBOARD_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const STATS_STORAGE_KEY = "letterlock.stats.v1";
-const MODE_STORAGE_KEY = "letterlock.mode.v1";
 const DAILY_SESSION_STORAGE_KEY = "letterlock.dailySession.v1";
+const PRACTICE_SESSION_STORAGE_KEY = "letterlock.practiceSession.v1";
 const STATS_SCHEMA_VERSION = 3;
-const LEGACY_COMPLETED_ROUNDS_FOR_CORRECTION = 24;
-const LEGACY_ABANDONED_ROUND_CORRECTION = 3;
 const EASTER_EGG_WORD = "gaver";
 const CONFETTI_DURATION = 4200;
 const CONFETTI_PIECES = 120;
@@ -34,8 +32,9 @@ const GAME_MODES = {
 };
 const DAILY_ANSWER_OVERRIDES = {
   "2026-05-27": "plant",
+  "2026-05-28": "smile",
 };
-const DAILY_EPOCH = new Date(2024, 0, 1);
+const DAILY_EPOCH = Date.UTC(2024, 0, 1);
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_WORDS = [
   "about",
@@ -106,7 +105,6 @@ const els = {
   statsTotal: document.querySelector("#stats-total"),
   statsWins: document.querySelector("#stats-wins"),
   statsLosses: document.querySelector("#stats-losses"),
-  statsAbandoned: document.querySelector("#stats-abandoned"),
   statsWinRate: document.querySelector("#stats-win-rate"),
   statsAverage: document.querySelector("#stats-average"),
   statsEmpty: document.querySelector("#stats-empty"),
@@ -114,15 +112,28 @@ const els = {
   newGameButton: document.querySelector("#new-game-button"),
   resultPanel: document.querySelector("#result-panel"),
   answerLine: document.querySelector("#answer-line"),
+  wordInfo: document.querySelector("#word-info"),
+  wordInfoWord: document.querySelector("#word-info-word"),
+  wordInfoLevel: document.querySelector("#word-info-level"),
+  wordInfoEnglish: document.querySelector("#word-info-en"),
+  wordInfoChinese: document.querySelector("#word-info-zh"),
   copyButton: document.querySelector("#copy-button"),
+  shareDialog: document.querySelector("#share-dialog"),
+  closeShareButton: document.querySelector("#close-share-button"),
+  shareMeta: document.querySelector("#share-meta"),
+  shareScore: document.querySelector("#share-score"),
+  shareGrid: document.querySelector("#share-grid"),
+  shareCopyButton: document.querySelector("#share-copy-button"),
+  shareCopyStatus: document.querySelector("#share-copy-status"),
   confetti: document.querySelector("#confetti"),
   unlockEffect: document.querySelector("#unlock-effect"),
   modeButtons: document.querySelectorAll("[data-mode]"),
   statsModeButtons: document.querySelectorAll("[data-stats-mode]"),
+  resetRecordsButton: document.querySelector("#reset-records-button"),
 };
 
 const state = {
-  mode: loadMode(),
+  mode: GAME_MODES.daily,
   activeStatsMode: GAME_MODES.daily,
   round: 0,
   dailyKey: getDailyKey(),
@@ -133,7 +144,6 @@ const state = {
   revealingGuessIndex: -1,
   solved: false,
   gameOver: false,
-  abandonedRecorded: false,
   nextPracticeRoundPrepared: false,
   modeSessions: {},
   stats: loadStats(),
@@ -154,18 +164,44 @@ els.helpButton.addEventListener("click", () => els.helpDialog.showModal());
 els.closeHelpButton.addEventListener("click", () => els.helpDialog.close());
 els.statsButton.addEventListener("click", openStatsDialog);
 els.closeStatsButton.addEventListener("click", () => els.statsDialog.close());
-els.copyButton.addEventListener("click", copyResult);
+els.closeShareButton.addEventListener("click", () => els.shareDialog.close());
+els.copyButton.addEventListener("click", openShareDialog);
+els.shareCopyButton.addEventListener("click", copyShareText);
 els.modeButtons.forEach((button) => {
   button.addEventListener("click", () => switchMode(button.dataset.mode));
 });
 els.statsModeButtons.forEach((button) => {
   button.addEventListener("click", () => switchStatsMode(button.dataset.statsMode));
 });
-window.addEventListener("beforeunload", recordAbandonedRound);
+els.resetRecordsButton.addEventListener("click", resetAllRecords);
+window.addEventListener("pagehide", saveCurrentSession);
 
 function loadInitialGame() {
   if (!restoreModeSession(state.mode)) {
     startGame({ skipAbandonedRecord: true });
+  }
+  warnIfStorageMayBeTemporary();
+}
+
+function warnIfStorageMayBeTemporary() {
+  if (window.location.protocol === "file:") {
+    setMessage("当前是本地文件打开，保存可能被浏览器拦截；测试记录保留请用本地服务器或 GitHub Pages 地址。", "error");
+    return;
+  }
+
+  if (!canUseLocalStorage()) {
+    setMessage("当前浏览器阻止了本机保存，重新打开后记录可能会丢失。", "error");
+  }
+}
+
+function canUseLocalStorage() {
+  try {
+    const testKey = "letterlock.storageTest";
+    localStorage.setItem(testKey, "1");
+    localStorage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -180,13 +216,17 @@ function handleNewGameButton() {
     return;
   }
 
-  startGame();
+  const shouldAdvanceRound = state.gameOver;
+  startGame({
+    advancePracticeRound: shouldAdvanceRound,
+    skipAbandonedRecord: true,
+  });
+  if (!shouldAdvanceRound) {
+    setMessage("本局已换词重新开始");
+  }
 }
 
 function startGame(options = {}) {
-  if (!options.skipAbandonedRecord) {
-    recordAbandonedRound();
-  }
   clearUnlockEffect();
   const shouldAdvancePracticeRound =
     state.mode === GAME_MODES.practice && (options.advancePracticeRound ?? true);
@@ -208,7 +248,6 @@ function startGame(options = {}) {
   state.revealingGuessIndex = -1;
   state.solved = false;
   state.gameOver = false;
-  state.abandonedRecorded = false;
   state.nextPracticeRoundPrepared = false;
   syncResultPanel();
   setMessage("");
@@ -217,7 +256,14 @@ function startGame(options = {}) {
 }
 
 function handlePhysicalKey(event) {
-  if (event.metaKey || event.ctrlKey || event.altKey || els.helpDialog.open || els.statsDialog.open) {
+  if (
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    els.helpDialog.open ||
+    els.statsDialog.open ||
+    els.shareDialog.open
+  ) {
     return;
   }
 
@@ -289,14 +335,12 @@ function submitGuess() {
     state.solved = true;
     state.gameOver = true;
     recordGameResult(true);
-    els.resultPanel.hidden = false;
-    els.answerLine.textContent = `答案：${state.answer.toUpperCase()}，用了 ${state.guesses.length} 次。`;
+    syncResultPanel();
     setMessage(`命中！用了 ${state.guesses.length} 次。`, "success");
   } else if (state.guesses.length >= attemptLimit) {
     state.gameOver = true;
     recordGameResult(false);
-    els.resultPanel.hidden = false;
-    els.answerLine.textContent = `答案：${state.answer.toUpperCase()}。`;
+    syncResultPanel();
     setMessage(`第 ${attemptLimit} 次还没中，本局结束。`, "error");
   } else {
     const triesLeft = attemptLimit - state.guesses.length;
@@ -322,13 +366,19 @@ function renderMode() {
     state.mode === GAME_MODES.daily
       ? `每日挑战 · ${formatDailyLabel(state.dailyKey)}`
       : `练习模式 · 第 ${getPracticeDisplayRound()} 局`;
+  const newGameButtonLabel =
+    state.mode === GAME_MODES.daily
+      ? "保留今日挑战"
+      : state.gameOver
+        ? "进入下一局"
+        : "本局重来并换词";
   els.newGameButton.setAttribute(
     "aria-label",
-    state.mode === GAME_MODES.daily ? "保留今日挑战" : "换一个练习词",
+    newGameButtonLabel,
   );
   els.newGameButton.setAttribute(
     "title",
-    state.mode === GAME_MODES.daily ? "保留今日挑战" : "换一个练习词",
+    newGameButtonLabel,
   );
   els.modeButtons.forEach((button) => {
     const selected = button.dataset.mode === state.mode;
@@ -341,6 +391,7 @@ function syncResultPanel() {
   if (!state.gameOver) {
     els.resultPanel.hidden = true;
     els.answerLine.textContent = "";
+    renderWordInfo("");
     return;
   }
 
@@ -348,6 +399,25 @@ function syncResultPanel() {
   els.answerLine.textContent = state.solved
     ? `答案：${state.answer.toUpperCase()}，用了 ${state.guesses.length} 次。`
     : `答案：${state.answer.toUpperCase()}。`;
+  renderWordInfo(state.answer);
+}
+
+function renderWordInfo(word) {
+  const info = word ? globalThis.LETTERLOCK_WORD_INFO?.[word] : null;
+  if (!info || (!info.en && !info.zh)) {
+    els.wordInfo.hidden = true;
+    els.wordInfoWord.textContent = "";
+    els.wordInfoLevel.textContent = "";
+    els.wordInfoEnglish.textContent = "";
+    els.wordInfoChinese.textContent = "";
+    return;
+  }
+
+  els.wordInfo.hidden = false;
+  els.wordInfoWord.textContent = word.toUpperCase();
+  els.wordInfoLevel.textContent = info.level || "较少见";
+  els.wordInfoEnglish.textContent = info.en || "暂无英文释义";
+  els.wordInfoChinese.textContent = info.zh || "暂无中文含义";
 }
 
 function renderBoard() {
@@ -366,15 +436,15 @@ function renderBoard() {
     if (guess) {
       for (let index = 0; index < WORD_LENGTH; index += 1) {
         const revealIndex = rowIndex === state.revealingGuessIndex ? index : -1;
-        row.append(createTile(guess.word[index], guess.evaluation[index], false, revealIndex));
+        row.append(createTile(guess.word[index], guess.evaluation[index], false, revealIndex, index));
       }
     } else if (rowIndex === state.guesses.length && !state.gameOver) {
       for (let index = 0; index < WORD_LENGTH; index += 1) {
-        row.append(createTile(state.currentGuess[index] || "", "", true));
+        row.append(createTile(state.currentGuess[index] || "", "", true, -1, index));
       }
     } else {
       for (let index = 0; index < WORD_LENGTH; index += 1) {
-        row.append(createTile("", "", false));
+        row.append(createTile("", "", false, -1, index));
       }
     }
 
@@ -382,7 +452,7 @@ function renderBoard() {
   }
 }
 
-function createTile(letter, status, active, revealIndex = -1) {
+function createTile(letter, status, active, revealIndex = -1, letterIndex = 0) {
   const tile = document.createElement("div");
   tile.className = [
     "tile",
@@ -394,7 +464,7 @@ function createTile(letter, status, active, revealIndex = -1) {
   ]
     .filter(Boolean)
     .join(" ");
-  tile.textContent = letter;
+  tile.textContent = formatTileLetter(letter, letterIndex);
   if (revealIndex >= 0) {
     tile.style.setProperty("--reveal-index", revealIndex);
   }
@@ -404,6 +474,13 @@ function createTile(letter, status, active, revealIndex = -1) {
   }
 
   return tile;
+}
+
+function formatTileLetter(letter, index) {
+  if (!letter) {
+    return "";
+  }
+  return letter.toUpperCase();
 }
 
 function renderKeyboard() {
@@ -423,15 +500,19 @@ function renderKeyboard() {
 
     if (rowIndex === 1) {
       row.append(createKeyboardSpacer("half"));
+      row.append(createKey("enter", "enter", true, "ENTER", "mobile-enter"));
     }
 
     if (rowIndex === 2) {
-      row.prepend(createKey("enter", "ENTER", true));
+      row.prepend(createKey("enter", "ENTER", true, "ENTER", "desktop-enter"));
+      row.prepend(createAuxKey("⇧", "shift-key", "Shift"));
       row.append(createKey("backspace", "⌫", true, "删除"));
     }
 
     els.keyboard.append(row);
   });
+
+  els.keyboard.append(renderMobileCommandRow());
 }
 
 function openStatsDialog() {
@@ -442,10 +523,10 @@ function openStatsDialog() {
 
 function renderStats() {
   const stats = getStatsForMode(state.activeStatsMode);
-  const { wins, losses, abandoned, distribution } = stats;
+  const { wins, losses, distribution } = stats;
   const attemptLimit = getAttemptLimit(state.activeStatsMode);
   const completed = wins + losses;
-  const total = completed + abandoned;
+  const total = completed;
   const totalWinGuesses = distribution.reduce((sum, count, index) => sum + count * index, 0);
   const average = wins ? totalWinGuesses / wins : 0;
   const maxBucket = Math.max(1, ...distribution.slice(1, attemptLimit + 1));
@@ -458,7 +539,6 @@ function renderStats() {
   els.statsTotal.textContent = total.toLocaleString("en-US");
   els.statsWins.textContent = wins.toLocaleString("en-US");
   els.statsLosses.textContent = losses.toLocaleString("en-US");
-  els.statsAbandoned.textContent = abandoned.toLocaleString("en-US");
   els.statsWinRate.textContent = completed ? `${Math.round((wins / completed) * 100)}%` : "0%";
   els.statsAverage.textContent = wins ? average.toFixed(1) : "-";
   els.statsEmpty.hidden = wins > 0;
@@ -493,7 +573,6 @@ function renderStats() {
 
 function recordGameResult(won) {
   const stats = getStatsForMode(state.mode);
-  state.abandonedRecorded = true;
   if (won) {
     stats.wins += 1;
     stats.distribution[state.guesses.length] += 1;
@@ -504,27 +583,35 @@ function recordGameResult(won) {
   renderStats();
 }
 
-function recordAbandonedRound() {
-  if (state.gameOver || state.abandonedRecorded || state.guesses.length === 0) {
-    return;
-  }
-
-  getStatsForMode(state.mode).abandoned += 1;
-  state.abandonedRecorded = true;
-  saveStats(state.stats);
-  saveCurrentSession();
-}
-
-function createKey(key, label, wide, ariaLabel = label) {
+function createKey(key, label, wide, ariaLabel = label, extraClass = "") {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = ["key", wide ? "wide" : "", state.keyStatuses[key] || ""]
+  button.className = ["key", wide ? "wide" : "", extraClass, state.keyStatuses[key] || ""]
     .filter(Boolean)
     .join(" ");
   button.dataset.key = key;
   button.textContent = label;
   button.setAttribute("aria-label", ariaLabel);
   return button;
+}
+
+function createAuxKey(label, extraClass = "", ariaLabel = label) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = ["key", "aux-key", extraClass].filter(Boolean).join(" ");
+  button.textContent = label;
+  button.setAttribute("aria-label", ariaLabel);
+  button.disabled = true;
+  return button;
+}
+
+function renderMobileCommandRow() {
+  const row = document.createElement("div");
+  row.className = "keyboard-row keyboard-command-row";
+  row.append(createAuxKey("123", "number-key", "数字键"));
+  row.append(createAuxKey("☺", "emoji-key", "表情键"));
+  row.append(createAuxKey("", "space-key", "空格键"));
+  return row;
 }
 
 function createKeyboardSpacer(size = "") {
@@ -587,6 +674,8 @@ function saveCurrentSession() {
   state.modeSessions[state.mode] = session;
   if (state.mode === GAME_MODES.daily) {
     saveDailySession(session);
+  } else if (state.mode === GAME_MODES.practice) {
+    savePracticeSession(session);
   }
 }
 
@@ -603,7 +692,6 @@ function captureSession() {
     currentGuess: state.currentGuess,
     solved: state.solved,
     gameOver: state.gameOver,
-    abandonedRecorded: state.abandonedRecorded,
     nextPracticeRoundPrepared: state.nextPracticeRoundPrepared,
     lastAnswer: state.lastAnswer,
   };
@@ -630,7 +718,6 @@ function applySession(session) {
   state.revealingGuessIndex = -1;
   state.solved = session.solved;
   state.gameOver = session.gameOver;
-  state.abandonedRecorded = session.abandonedRecorded;
   state.nextPracticeRoundPrepared = session.nextPracticeRoundPrepared;
   state.lastAnswer = session.lastAnswer || session.answer;
   syncResultPanel();
@@ -641,7 +728,10 @@ function applySession(session) {
 
 function getRestorableSession(mode) {
   if (mode !== GAME_MODES.daily) {
-    return sanitizeSession(mode, state.modeSessions[mode]);
+    return choosePreferredSession(
+      sanitizeSession(mode, state.modeSessions[mode]),
+      sanitizeSession(mode, loadPracticeSession()),
+    );
   }
 
   return choosePreferredSession(
@@ -689,7 +779,6 @@ function sanitizeSession(mode, source) {
     currentGuess,
     solved,
     gameOver,
-    abandonedRecorded: Boolean(source.abandonedRecorded),
     nextPracticeRoundPrepared: false,
     lastAnswer: String(source.lastAnswer || answer).trim().toLowerCase(),
   };
@@ -762,9 +851,29 @@ function saveDailySession(session) {
   }
 }
 
+function savePracticeSession(session) {
+  try {
+    const sanitized = sanitizeSession(GAME_MODES.practice, session);
+    if (sanitized) {
+      state.modeSessions[GAME_MODES.practice] = sanitized;
+      localStorage.setItem(PRACTICE_SESSION_STORAGE_KEY, JSON.stringify(sanitized));
+    }
+  } catch {
+    // Practice progress should survive refresh when storage is available.
+  }
+}
+
 function loadDailySession() {
   try {
     return JSON.parse(localStorage.getItem(DAILY_SESSION_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function loadPracticeSession() {
+  try {
+    return JSON.parse(localStorage.getItem(PRACTICE_SESSION_STORAGE_KEY));
   } catch {
     return null;
   }
@@ -777,7 +886,6 @@ function switchMode(nextMode) {
 
   saveCurrentSession();
   state.mode = nextMode;
-  saveMode(nextMode);
   if (!restoreModeSession(nextMode)) {
     startGame({ advancePracticeRound: false, skipAbandonedRecord: true });
   }
@@ -790,6 +898,35 @@ function switchStatsMode(nextMode) {
 
   state.activeStatsMode = nextMode;
   renderStats();
+}
+
+function resetAllRecords() {
+  const confirmed = window.confirm("确定要清空本机所有记录吗？统计、每日挑战进度和练习模式局数都会被删除。");
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(STATS_STORAGE_KEY);
+    localStorage.removeItem("letterlock.mode.v1");
+    localStorage.removeItem(DAILY_SESSION_STORAGE_KEY);
+    localStorage.removeItem(PRACTICE_SESSION_STORAGE_KEY);
+  } catch {
+    setMessage("本机记录暂时无法清空。", "error");
+    return;
+  }
+
+  state.mode = GAME_MODES.daily;
+  state.activeStatsMode = GAME_MODES.daily;
+  state.round = 0;
+  state.dailyKey = getDailyKey();
+  state.modeSessions = {};
+  state.stats = createEmptyStats();
+  state.lastAnswer = "";
+  saveStats(state.stats);
+  startGame({ skipAbandonedRecord: true });
+  renderStats();
+  setMessage("本机记录已清空。", "success");
 }
 
 function pickAnswer(mode, previousAnswer) {
@@ -819,34 +956,27 @@ function getRestartHint() {
     : "点右上角可以换一个练习词。";
 }
 
-function loadMode() {
-  try {
-    const savedMode = localStorage.getItem(MODE_STORAGE_KEY);
-    return Object.values(GAME_MODES).includes(savedMode) ? savedMode : GAME_MODES.daily;
-  } catch {
-    return GAME_MODES.daily;
-  }
-}
-
-function saveMode(mode) {
-  try {
-    localStorage.setItem(MODE_STORAGE_KEY, mode);
-  } catch {
-    // Mode persistence is nice to have; gameplay should continue if storage is blocked.
-  }
-}
-
 function getDailyKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value || String(date.getUTCFullYear());
+  const month =
+    parts.find((part) => part.type === "month")?.value ||
+    String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day =
+    parts.find((part) => part.type === "day")?.value ||
+    String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function getDailyIndex(length) {
-  const today = new Date();
-  const localMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const daysSinceEpoch = Math.floor((localMidnight - DAILY_EPOCH) / DAY_IN_MS);
+  const [year, month, day] = getDailyKey().split("-").map(Number);
+  const beijingDate = Date.UTC(year, month - 1, day);
+  const daysSinceEpoch = Math.floor((beijingDate - DAILY_EPOCH) / DAY_IN_MS);
   return positiveModulo(daysSinceEpoch, length);
 }
 
@@ -1167,7 +1297,6 @@ function createEmptyModeStats() {
   return {
     wins: 0,
     losses: 0,
-    abandoned: 0,
     distribution: Array(MAX_ATTEMPTS + 1).fill(0),
   };
 }
@@ -1191,7 +1320,7 @@ function loadStats() {
       stats.modes[GAME_MODES.daily] = sanitizeModeStats(saved.modes[GAME_MODES.daily]);
       stats.modes[GAME_MODES.practice] = sanitizeModeStats(saved.modes[GAME_MODES.practice]);
     } else if (saved) {
-      stats.modes[GAME_MODES.practice] = sanitizeModeStats(saved, true);
+      stats.modes[GAME_MODES.practice] = sanitizeModeStats(saved);
     }
 
     localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(stats));
@@ -1201,25 +1330,16 @@ function loadStats() {
   }
 }
 
-function sanitizeModeStats(source, applyLegacyCorrection = false) {
+function sanitizeModeStats(source) {
   const stats = createEmptyModeStats();
   stats.wins = Number.isInteger(source?.wins) && source.wins > 0 ? source.wins : 0;
   stats.losses = Number.isInteger(source?.losses) && source.losses > 0 ? source.losses : 0;
-  stats.abandoned = Number.isInteger(source?.abandoned) && source.abandoned > 0 ? source.abandoned : 0;
 
   if (Array.isArray(source?.distribution)) {
     for (let index = 1; index <= MAX_ATTEMPTS; index += 1) {
       const count = source.distribution[index];
       stats.distribution[index] = Number.isInteger(count) && count > 0 ? count : 0;
     }
-  }
-
-  if (
-    applyLegacyCorrection &&
-    !Number.isInteger(source?.abandoned) &&
-    stats.wins + stats.losses === LEGACY_COMPLETED_ROUNDS_FOR_CORRECTION
-  ) {
-    stats.abandoned = LEGACY_ABANDONED_ROUND_CORRECTION;
   }
 
   return stats;
@@ -1239,8 +1359,54 @@ function setMessage(text, type = "") {
 }
 
 function createShareText() {
-  const attemptLimit = getAttemptLimit();
-  const rows = state.guesses
+  return `LetterLock ${getShareModeText()} ${getShareScoreText()}\n${getShareEmojiRows()}\n不含答案`;
+}
+
+function openShareDialog() {
+  if (!state.gameOver) {
+    return;
+  }
+
+  renderSharePreview();
+  els.shareCopyStatus.textContent = "";
+  els.shareDialog.showModal();
+}
+
+function renderSharePreview() {
+  els.shareMeta.textContent = getShareModeText();
+  els.shareScore.textContent = getShareScoreText();
+  els.shareGrid.innerHTML = "";
+
+  state.guesses.forEach(({ evaluation }) => {
+    const row = document.createElement("div");
+    row.className = "share-grid-row";
+    evaluation.forEach((status) => {
+      const tile = document.createElement("span");
+      tile.className = ["share-grid-cell", status].filter(Boolean).join(" ");
+      row.append(tile);
+    });
+    els.shareGrid.append(row);
+  });
+}
+
+function getShareModeText() {
+  if (state.mode === GAME_MODES.daily) {
+    return `每日挑战 · ${formatShareDate(state.dailyKey)}`;
+  }
+  return `练习模式 · 第 ${getPracticeDisplayRound()} 局`;
+}
+
+function formatShareDate(key) {
+  return key.split("-").join(".");
+}
+
+function getShareScoreText() {
+  const score = state.solved ? state.guesses.length : "X";
+  return `${score}/${getAttemptLimit()}`;
+}
+
+function getShareEmojiRows() {
+  return state.guesses
     .map(({ evaluation }) =>
       evaluation
         .map((status) => {
@@ -1255,21 +1421,16 @@ function createShareText() {
         .join(""),
     )
     .join("\n");
-
-  const modeLine =
-    state.mode === GAME_MODES.daily
-      ? `每日挑战 ${state.dailyKey}`
-      : `练习模式 第 ${state.round} 局`;
-
-  return `LetterLock ${modeLine} ${state.guesses.length}/${attemptLimit}\n${rows}\n答案：${state.answer.toUpperCase()}`;
 }
 
-async function copyResult() {
+async function copyShareText() {
   const text = createShareText();
   try {
     await navigator.clipboard.writeText(text);
-    setMessage("结果已复制。", "success");
+    els.shareCopyStatus.textContent = "已复制。";
+    setMessage("分享文案已复制。", "success");
   } catch {
+    els.shareCopyStatus.textContent = "当前浏览器不允许自动复制，文案已显示在页面下方。";
     setMessage(text);
   }
 }
