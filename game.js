@@ -356,6 +356,7 @@ function submitGuess() {
 }
 
 function render() {
+  syncPracticeRoundNumber();
   renderMode();
   renderBoard();
   renderKeyboard();
@@ -500,19 +501,15 @@ function renderKeyboard() {
 
     if (rowIndex === 1) {
       row.append(createKeyboardSpacer("half"));
-      row.append(createKey("enter", "enter", true, "ENTER", "mobile-enter"));
     }
 
     if (rowIndex === 2) {
-      row.prepend(createKey("enter", "ENTER", true, "ENTER", "desktop-enter"));
-      row.prepend(createAuxKey("⇧", "shift-key", "Shift"));
+      row.prepend(createKey("enter", "ENTER", true));
       row.append(createKey("backspace", "⌫", true, "删除"));
     }
 
     els.keyboard.append(row);
   });
-
-  els.keyboard.append(renderMobileCommandRow());
 }
 
 function openStatsDialog() {
@@ -593,25 +590,6 @@ function createKey(key, label, wide, ariaLabel = label, extraClass = "") {
   button.textContent = label;
   button.setAttribute("aria-label", ariaLabel);
   return button;
-}
-
-function createAuxKey(label, extraClass = "", ariaLabel = label) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = ["key", "aux-key", extraClass].filter(Boolean).join(" ");
-  button.textContent = label;
-  button.setAttribute("aria-label", ariaLabel);
-  button.disabled = true;
-  return button;
-}
-
-function renderMobileCommandRow() {
-  const row = document.createElement("div");
-  row.className = "keyboard-row keyboard-command-row";
-  row.append(createAuxKey("123", "number-key", "数字键"));
-  row.append(createAuxKey("☺", "emoji-key", "表情键"));
-  row.append(createAuxKey("", "space-key", "空格键"));
-  return row;
 }
 
 function createKeyboardSpacer(size = "") {
@@ -994,7 +972,10 @@ function getAttemptLimit(mode = state.mode) {
 }
 
 function getPracticeDisplayRound() {
-  return Math.max(1, state.round || 1);
+  if (state.mode !== GAME_MODES.practice) {
+    return Math.max(1, state.round || 1);
+  }
+  return getExpectedPracticeRoundNumber();
 }
 
 function getStatsForMode(mode) {
@@ -1002,6 +983,23 @@ function getStatsForMode(mode) {
     state.stats.modes[mode] = createEmptyModeStats();
   }
   return state.stats.modes[mode];
+}
+
+function getCompletedPracticeRounds() {
+  const stats = getStatsForMode(GAME_MODES.practice);
+  return stats.wins + stats.losses;
+}
+
+function getExpectedPracticeRoundNumber() {
+  const completed = getCompletedPracticeRounds();
+  return Math.max(1, completed + (state.gameOver ? 0 : 1));
+}
+
+function syncPracticeRoundNumber() {
+  if (state.mode !== GAME_MODES.practice) {
+    return;
+  }
+  state.round = getExpectedPracticeRoundNumber();
 }
 
 function formatDailyLabel(key) {
