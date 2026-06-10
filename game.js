@@ -16,7 +16,9 @@ const KEYBOARD_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const STATS_STORAGE_KEY = "letterlock.stats.v1";
 const DAILY_SESSION_STORAGE_KEY = "letterlock.dailySession.v1";
 const PRACTICE_SESSION_STORAGE_KEY = "letterlock.practiceSession.v1";
+const DAILY_HISTORY_STORAGE_KEY = "letterlock.dailyHistory.v1";
 const STATS_SCHEMA_VERSION = 3;
+const DAILY_HISTORY_DAYS = 14;
 const EASTER_EGG_WORD = "gaver";
 const CONFETTI_DURATION = 4200;
 const CONFETTI_PIECES = 120;
@@ -109,6 +111,13 @@ const els = {
   statsAverage: document.querySelector("#stats-average"),
   statsEmpty: document.querySelector("#stats-empty"),
   guessDistribution: document.querySelector("#guess-distribution"),
+  dailyHistory: document.querySelector("#daily-history"),
+  dailyCurrentStreak: document.querySelector("#daily-current-streak"),
+  dailyBestStreak: document.querySelector("#daily-best-streak"),
+  dailyRecentWins: document.querySelector("#daily-recent-wins"),
+  dailyCalendar: document.querySelector("#daily-calendar"),
+  dailyHistoryList: document.querySelector("#daily-history-list"),
+  dailyHistoryEmpty: document.querySelector("#daily-history-empty"),
   newGameButton: document.querySelector("#new-game-button"),
   resultPanel: document.querySelector("#result-panel"),
   answerLine: document.querySelector("#answer-line"),
@@ -142,6 +151,7 @@ const state = {
   currentGuess: "",
   keyStatuses: {},
   revealingGuessIndex: -1,
+  inputPulseIndex: -1,
   solved: false,
   gameOver: false,
   nextPracticeRoundPrepared: false,
@@ -180,6 +190,7 @@ function loadInitialGame() {
   if (!restoreModeSession(state.mode)) {
     startGame({ skipAbandonedRecord: true });
   }
+  syncDailyHistoryFromStoredSession();
   warnIfStorageMayBeTemporary();
 }
 
@@ -246,6 +257,7 @@ function startGame(options = {}) {
   state.currentGuess = "";
   state.keyStatuses = {};
   state.revealingGuessIndex = -1;
+  state.inputPulseIndex = -1;
   state.solved = false;
   state.gameOver = false;
   state.nextPracticeRoundPrepared = false;
@@ -297,15 +309,20 @@ function handleKey(key) {
   }
 
   if (key === "backspace") {
+    const deletedIndex = state.currentGuess.length - 1;
     state.currentGuess = state.currentGuess.slice(0, -1);
+    state.inputPulseIndex = deletedIndex >= 0 ? deletedIndex : -1;
     render();
+    state.inputPulseIndex = -1;
     saveCurrentSession();
     return;
   }
 
   if (/^[a-z]$/.test(key) && state.currentGuess.length < WORD_LENGTH) {
+    state.inputPulseIndex = state.currentGuess.length;
     state.currentGuess += key;
     render();
+    state.inputPulseIndex = -1;
     saveCurrentSession();
   }
 }
@@ -366,7 +383,7 @@ function renderMode() {
   els.roundLabel.textContent =
     state.mode === GAME_MODES.daily
       ? `每日挑战 · ${formatDailyLabel(state.dailyKey)}`
-      : `练习模式 · 第 ${getPracticeDisplayRound()} 局`;
+      : "自由练习";
   const newGameButtonLabel =
     state.mode === GAME_MODES.daily
       ? "保留今日挑战"
@@ -441,7 +458,16 @@ function renderBoard() {
       }
     } else if (rowIndex === state.guesses.length && !state.gameOver) {
       for (let index = 0; index < WORD_LENGTH; index += 1) {
-        row.append(createTile(state.currentGuess[index] || "", "", true, -1, index));
+        row.append(
+          createTile(
+            state.currentGuess[index] || "",
+            "",
+            true,
+            -1,
+            index,
+            index === state.inputPulseIndex,
+          ),
+        );
       }
     } else {
       for (let index = 0; index < WORD_LENGTH; index += 1) {
@@ -453,13 +479,14 @@ function renderBoard() {
   }
 }
 
-function createTile(letter, status, active, revealIndex = -1, letterIndex = 0) {
+function createTile(letter, status, active, revealIndex = -1, letterIndex = 0, pulse = false) {
   const tile = document.createElement("div");
   tile.className = [
     "tile",
     letter ? "filled" : "",
     active ? "active" : "",
     active && letter ? "has-letter" : "",
+    pulse ? "input-pulse" : "",
     revealIndex >= 0 ? "reveal" : "",
     status,
   ]
@@ -540,6 +567,7 @@ function renderStats() {
   els.statsAverage.textContent = wins ? average.toFixed(1) : "-";
   els.statsEmpty.hidden = wins > 0;
   els.guessDistribution.innerHTML = "";
+  renderDailyHistory();
 
   for (let guessCount = 1; guessCount <= attemptLimit; guessCount += 1) {
     const count = distribution[guessCount] || 0;
@@ -568,6 +596,114 @@ function renderStats() {
   }
 }
 
+function renderDailyHistory() {
+  const isDailyStats = state.activeStatsMode === GAME_MODES.daily;
+  els.dailyHistory.hidden = !isDailyStats;
+  if (!isDailyStats) {
+    return;
+  }
+
+  const history = loadDailyHistory();
+  const keys = getRecentDailyKeys(DAILY_HISTORY_DAYS);
+  const playedKeys = keys.filter((key) => history[key]);
+  const recentWins = keys.filter((key) => history[key]?.won).length;
+
+  els.dailyCurrentStreak.textContent = `${getCurrentDailyStreak(history)}天`;
+  els.dailyBestStreak.textContent = `${getBestDailyStreak(history)}天`;
+  els.dailyRecentWins.textContent = `${recentWins}/${DAILY_HISTORY_DAYS}`;
+  els.dailyHistoryEmpty.hidden = playedKeys.length > 0;
+  els.dailyCalendar.innerHTML = "";
+  els.dailyHistoryList.innerHTML = "";
+
+  keys.forEach((key) => {
+    const record = history[key];
+    const day = document.createElement("div");
+    day.className = [
+      "daily-calendar-day",
+      record ? (record.won ? "won" : "lost") : "missed",
+      key === getDailyKey() ? "today" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    day.setAttribute("title", getDailyHistoryTitle(key, record));
+
+    const date = document.createElement("span");
+    date.textContent = formatHistoryDate(key);
+    const result = document.createElement("strong");
+    result.textContent = record ? (record.won ? `${record.guesses}/${record.maxAttempts}` : "X") : "-";
+
+    day.append(date, result);
+    els.dailyCalendar.append(day);
+  });
+
+  playedKeys
+    .slice()
+    .reverse()
+    .slice(0, 7)
+    .forEach((key) => {
+      const record = history[key];
+      const row = document.createElement("div");
+      row.className = ["daily-history-row", record.won ? "won" : "lost"].join(" ");
+
+      const date = document.createElement("span");
+      date.textContent = formatHistoryDate(key);
+      const status = document.createElement("strong");
+      status.textContent = record.won ? "猜对" : "未中";
+      const score = document.createElement("span");
+      score.textContent = record.won ? `${record.guesses}/${record.maxAttempts}` : `X/${record.maxAttempts}`;
+
+      row.append(date, status, score);
+      els.dailyHistoryList.append(row);
+    });
+}
+
+function getDailyHistoryTitle(key, record) {
+  if (!record) {
+    return `${formatHistoryDate(key)} 未玩`;
+  }
+  return record.won
+    ? `${formatHistoryDate(key)} 猜对，用了 ${record.guesses} 次`
+    : `${formatHistoryDate(key)} 未中`;
+}
+
+function recordDailyHistory(won) {
+  recordDailyHistoryFromSession({
+    dailyKey: state.dailyKey,
+    guesses: state.guesses,
+    gameOver: state.gameOver,
+    solved: won,
+  });
+}
+
+function recordDailyHistoryFromSession(session) {
+  if (!session?.gameOver || !session.dailyKey) {
+    return;
+  }
+
+  const history = loadDailyHistory();
+  history[session.dailyKey] = {
+    date: session.dailyKey,
+    won: Boolean(session.solved),
+    guesses: clamp(session.guesses?.length || 0, 0, DAILY_MAX_ATTEMPTS),
+    maxAttempts: DAILY_MAX_ATTEMPTS,
+  };
+  saveDailyHistory(history);
+}
+
+function syncDailyHistoryFromStoredSession() {
+  const candidates = [
+    state.mode === GAME_MODES.daily ? captureSession() : null,
+    loadDailySession(),
+  ];
+
+  candidates.forEach((candidate) => {
+    const session = sanitizeSession(GAME_MODES.daily, candidate);
+    if (session?.gameOver) {
+      recordDailyHistoryFromSession(session);
+    }
+  });
+}
+
 function recordGameResult(won) {
   const stats = getStatsForMode(state.mode);
   if (won) {
@@ -575,6 +711,9 @@ function recordGameResult(won) {
     stats.distribution[state.guesses.length] += 1;
   } else {
     stats.losses += 1;
+  }
+  if (state.mode === GAME_MODES.daily) {
+    recordDailyHistory(won);
   }
   saveStats(state.stats);
   renderStats();
@@ -889,6 +1028,7 @@ function resetAllRecords() {
     localStorage.removeItem("letterlock.mode.v1");
     localStorage.removeItem(DAILY_SESSION_STORAGE_KEY);
     localStorage.removeItem(PRACTICE_SESSION_STORAGE_KEY);
+    localStorage.removeItem(DAILY_HISTORY_STORAGE_KEY);
   } catch {
     setMessage("本机记录暂时无法清空。", "error");
     return;
@@ -956,6 +1096,64 @@ function getDailyIndex(length) {
   const beijingDate = Date.UTC(year, month - 1, day);
   const daysSinceEpoch = Math.floor((beijingDate - DAILY_EPOCH) / DAY_IN_MS);
   return positiveModulo(daysSinceEpoch, length);
+}
+
+function getRecentDailyKeys(count) {
+  const today = getDailyKey();
+  return Array.from({ length: count }, (_, index) => addDaysToDailyKey(today, index - count + 1));
+}
+
+function addDaysToDailyKey(key, delta) {
+  const [year, month, day] = key.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + delta));
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatHistoryDate(key) {
+  const [, month, day] = key.split("-");
+  return `${month}.${day}`;
+}
+
+function getCurrentDailyStreak(history) {
+  const today = getDailyKey();
+  const todayRecord = history[today];
+  if (todayRecord && !todayRecord.won) {
+    return 0;
+  }
+
+  let cursor = todayRecord?.won ? today : addDaysToDailyKey(today, -1);
+  let streak = 0;
+  while (history[cursor]?.won) {
+    streak += 1;
+    cursor = addDaysToDailyKey(cursor, -1);
+  }
+  return streak;
+}
+
+function getBestDailyStreak(history) {
+  const keys = Object.keys(history).sort();
+  let best = 0;
+  let current = 0;
+  let previous = "";
+
+  keys.forEach((key) => {
+    const record = history[key];
+    if (!record?.won) {
+      current = 0;
+      previous = key;
+      return;
+    }
+
+    current = previous && addDaysToDailyKey(previous, 1) === key ? current + 1 : 1;
+    best = Math.max(best, current);
+    previous = key;
+  });
+
+  return best;
 }
 
 function getDailyOverride(bank) {
@@ -1343,6 +1541,47 @@ function sanitizeModeStats(source) {
   return stats;
 }
 
+function loadDailyHistory() {
+  try {
+    return sanitizeDailyHistory(JSON.parse(localStorage.getItem(DAILY_HISTORY_STORAGE_KEY)));
+  } catch {
+    return {};
+  }
+}
+
+function saveDailyHistory(history) {
+  try {
+    localStorage.setItem(DAILY_HISTORY_STORAGE_KEY, JSON.stringify(sanitizeDailyHistory(history)));
+  } catch {
+    setMessage("每日挑战历史暂时无法保存到本地。", "error");
+  }
+}
+
+function sanitizeDailyHistory(source) {
+  if (!source || typeof source !== "object") {
+    return {};
+  }
+
+  const history = {};
+  Object.entries(source).forEach(([key, value]) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !value || typeof value !== "object") {
+      return;
+    }
+    const guesses = Number(value.guesses);
+    const maxAttempts = Number(value.maxAttempts);
+    history[key] = {
+      date: key,
+      won: Boolean(value.won),
+      guesses: Number.isInteger(guesses) ? clamp(guesses, 0, DAILY_MAX_ATTEMPTS) : 0,
+      maxAttempts: Number.isInteger(maxAttempts)
+        ? clamp(maxAttempts, 1, DAILY_MAX_ATTEMPTS)
+        : DAILY_MAX_ATTEMPTS,
+    };
+  });
+
+  return history;
+}
+
 function saveStats(stats) {
   try {
     localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(stats));
@@ -1391,7 +1630,7 @@ function getShareModeText() {
   if (state.mode === GAME_MODES.daily) {
     return `每日挑战 · ${formatShareDate(state.dailyKey)}`;
   }
-  return `练习模式 · 第 ${getPracticeDisplayRound()} 局`;
+  return "自由练习";
 }
 
 function formatShareDate(key) {

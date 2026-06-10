@@ -90,10 +90,18 @@ function stripChinesePartOfSpeech(text) {
 
 function compactText(text, maxLength) {
   const normalized = text.replace(/\s+/g, " ").replace(/[,，]\s*/g, "，").trim();
-  if (normalized.length <= maxLength) {
+  if (!maxLength || normalized.length <= maxLength) {
     return normalized;
   }
-  return `${normalized.slice(0, maxLength - 1).trim()}…`;
+  const clipped = normalized.slice(0, maxLength - 1);
+  const boundary = Math.max(
+    clipped.lastIndexOf("；"),
+    clipped.lastIndexOf(";"),
+    clipped.lastIndexOf("."),
+    clipped.lastIndexOf(" "),
+  );
+  const safeClip = boundary > Math.floor(maxLength * 0.72) ? clipped.slice(0, boundary) : clipped;
+  return `${safeClip.trim()}…`;
 }
 
 function firstUsefulLines(text, { strip, skipNetwork = false, maxLines = 2, maxLength = 96 }) {
@@ -111,23 +119,36 @@ function firstUsefulLines(text, { strip, skipNetwork = false, maxLines = 2, maxL
 
 function getLevel(word, entry, ranks) {
   const rank = ranks.get(word);
-  if (rank && rank <= 6000) {
-    return "常见";
+
+  if (rank && rank <= 1800) {
+    return "核心词";
   }
-  if (rank && rank <= 18000) {
-    return "较常见";
+  if (rank && rank <= 4500) {
+    return "高频词";
+  }
+  if (rank && rank <= 8500) {
+    return "常见词";
+  }
+  if (rank && rank <= 14000) {
+    return "进阶词";
+  }
+  if (rank) {
+    return "低频词";
   }
 
   const collins = Number(entry.collins || 0);
   const oxford = entry.oxford === "1";
   const tags = String(entry.tag || "");
-  if (collins >= 3 || oxford || /\b(?:zk|gk|cet4|ielts)\b/.test(tags)) {
-    return "常见";
+  if (collins >= 4 || /\b(?:zk|gk)\b/.test(tags)) {
+    return "高频词";
+  }
+  if (collins >= 2 || oxford || /\b(?:cet4|ielts)\b/.test(tags)) {
+    return "常见词";
   }
   if (rank || collins > 0 || Number(entry.bnc || 0) > 0 || Number(entry.frq || 0) > 0) {
-    return "较常见";
+    return "进阶词";
   }
-  return "较少见";
+  return "低频词";
 }
 
 if (!fs.existsSync(ECDICT_SOURCE)) {
@@ -171,7 +192,7 @@ ANSWERS.forEach((word) => {
     en: firstUsefulLines(entry.definition, {
       strip: stripEnglishPartOfSpeech,
       maxLines: 2,
-      maxLength: 118,
+      maxLength: 420,
     }),
     zh: firstUsefulLines(entry.translation, {
       strip: stripChinesePartOfSpeech,

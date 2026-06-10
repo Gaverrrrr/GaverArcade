@@ -375,6 +375,49 @@ button {
   text-align: center;
 }
 
+.game-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-content: center;
+  width: min(100%, 248px);
+  gap: 3px;
+  margin: 8px auto 0;
+  padding: 3px;
+  background: var(--faint);
+  border: 1px solid var(--faint);
+  border-radius: 999px;
+}
+
+.game-nav a {
+  display: grid;
+  min-width: 0;
+  min-height: 30px;
+  place-items: center;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 780;
+  line-height: 1;
+  text-decoration: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+
+.game-nav a:hover,
+.game-nav a:focus-visible {
+  color: var(--ink);
+  background: var(--faint);
+  outline: none;
+}
+
+.game-nav a.active {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--paper);
+  box-shadow: 0 1px 5px rgba(27, 31, 36, 0.08);
+}
+
 h1,
 h2,
 p {
@@ -512,6 +555,26 @@ h1 {
   transform-origin: center;
   transition: none;
   will-change: transform, background-color, border-color, color;
+}
+
+.tile.input-pulse {
+  animation: tile-input-pulse 140ms ease-out both;
+  transform-origin: center;
+  will-change: transform;
+}
+
+@keyframes tile-input-pulse {
+  0% {
+    transform: scale(1);
+  }
+
+  46% {
+    transform: scale(0.94);
+  }
+
+  100% {
+    transform: scale(1);
+  }
 }
 
 @keyframes tile-reveal {
@@ -1434,6 +1497,152 @@ dialog::backdrop {
   display: none;
 }
 
+.daily-history {
+  display: grid;
+  justify-self: center;
+  width: min(100%, 560px);
+  gap: 10px;
+}
+
+.daily-history[hidden] {
+  display: none;
+}
+
+.daily-history h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 780;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.daily-history-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.daily-history-stat {
+  display: grid;
+  min-width: 0;
+  min-height: 56px;
+  align-content: center;
+  gap: 2px;
+  padding: 8px 6px;
+  text-align: center;
+  background: var(--bg);
+  border: 1px solid var(--faint);
+  border-radius: var(--radius);
+}
+
+.daily-history-stat strong {
+  color: var(--ink);
+  font-size: 1.02rem;
+  font-weight: 820;
+  line-height: 1.1;
+}
+
+.daily-history-stat span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.daily-calendar {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.daily-calendar-day {
+  display: grid;
+  min-width: 0;
+  min-height: 50px;
+  align-content: center;
+  gap: 3px;
+  padding: 6px 3px;
+  text-align: center;
+  background: var(--bg);
+  border: 1px solid var(--faint);
+  border-radius: 7px;
+}
+
+.daily-calendar-day.today {
+  border-color: var(--line-strong);
+}
+
+.daily-calendar-day span {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 720;
+  line-height: 1;
+}
+
+.daily-calendar-day strong {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 820;
+  line-height: 1;
+}
+
+.daily-calendar-day.won {
+  background: rgba(83, 141, 78, 0.12);
+  border-color: rgba(83, 141, 78, 0.35);
+}
+
+.daily-calendar-day.won strong {
+  color: var(--correct);
+}
+
+.daily-calendar-day.lost {
+  background: rgba(120, 124, 126, 0.12);
+  border-color: rgba(120, 124, 126, 0.35);
+}
+
+.daily-calendar-day.lost strong {
+  color: var(--absent);
+}
+
+.daily-history-list {
+  display: grid;
+  gap: 6px;
+}
+
+.daily-history-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--faint);
+  border-radius: 7px;
+}
+
+.daily-history-row span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 720;
+  line-height: 1.1;
+}
+
+.daily-history-row strong {
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.daily-history-row.won strong {
+  color: var(--correct);
+}
+
+.daily-history-row.lost strong {
+  color: var(--absent);
+}
+
 .reset-records-button {
   justify-self: center;
   padding: 9px 14px;
@@ -1636,7 +1845,8 @@ dialog::backdrop {
   .unlock-effect,
   .unlock-effect *,
   body.unlocking .keyboard,
-  body.unlocking .key {
+  body.unlocking .key,
+  .tile.input-pulse {
     transition-duration: 1ms;
     animation-duration: 1ms;
     animation-delay: 0ms;
