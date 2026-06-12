@@ -1,9 +1,8 @@
-# LetterLock / WordWeave
+# LetterLock
 
-这个目录里有两个并行小游戏：
+这个目录里当前上线的是 LetterLock：
 
 - `index.html`：LetterLock，一个 Wordle 风格的五字母英文猜词小游戏。
-- `connections.html`：WordWeave，一个中文版 Connections 风格的中文词语分组游戏。
 
 ## 运行
 
@@ -16,7 +15,6 @@ python3 -m http.server 8765
 然后访问：
 
 - `http://localhost:8765/` 玩 LetterLock
-- `http://localhost:8765/connections.html` 玩 WordWeave
 
 ## LetterLock 玩法
 
@@ -27,10 +25,6 @@ python3 -m http.server 8765
 - 灰色：答案里不包含这个字母
 
 可以使用实体键盘，也可以点击页面下方的屏幕键盘。每日挑战最多 6 次，练习模式最多 10 次；练习模式未结束时，右上角按钮会重开本局并换一个词，结束后才会进入下一局。
-
-## WordWeave 玩法
-
-每局 16 个中文词语/短语，分成 4 个隐藏类别。每次选择 4 个词提交；正确会锁定该组，错误会消耗一次机会。类别会尽量具体，并加入固定搭配、前后缀和干扰项；同一组里可以混合两字、三字、四字词。每日挑战每天按北京时间固定一题，练习模式随机换题。
 
 ## 统计
 
