@@ -17,6 +17,7 @@ const STATS_STORAGE_KEY = "letterlock.stats.v1";
 const DAILY_SESSION_STORAGE_KEY = "letterlock.dailySession.v1";
 const PRACTICE_SESSION_STORAGE_KEY = "letterlock.practiceSession.v1";
 const DAILY_HISTORY_STORAGE_KEY = "letterlock.dailyHistory.v1";
+const THEME_STORAGE_KEY = "letterlock.theme.v1";
 const STATS_SCHEMA_VERSION = 3;
 const DAILY_HISTORY_DAYS = 14;
 const EASTER_EGG_WORD = "gaver";
@@ -99,6 +100,7 @@ const els = {
   message: document.querySelector("#message"),
   roundLabel: document.querySelector("#round-label"),
   helpButton: document.querySelector("#help-button"),
+  themeButton: document.querySelector("#theme-button"),
   closeHelpButton: document.querySelector("#close-help-button"),
   helpDialog: document.querySelector("#help-dialog"),
   statsButton: document.querySelector("#stats-button"),
@@ -166,6 +168,46 @@ let unlockHideTimer = 0;
 let unlockConfettiTimer = 0;
 
 loadInitialGame();
+
+const systemDarkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function getStoredTheme() {
+  try {
+    const value = localStorage.getItem(THEME_STORAGE_KEY);
+    return value === "light" || value === "dark" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  els.themeButton.textContent = theme === "dark" ? "☀" : "☾";
+  els.themeButton.setAttribute(
+    "aria-label",
+    theme === "dark" ? "切换到浅色模式" : "切换到深色模式",
+  );
+}
+
+function currentTheme() {
+  return getStoredTheme() ?? (systemDarkQuery.matches ? "dark" : "light");
+}
+
+applyTheme(currentTheme());
+systemDarkQuery.addEventListener("change", () => {
+  if (!getStoredTheme()) {
+    applyTheme(currentTheme());
+  }
+});
+els.themeButton.addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+  } catch {
+    /* 存储不可用时仅本次会话生效 */
+  }
+  applyTheme(next);
+});
 
 document.addEventListener("keydown", handlePhysicalKey);
 els.keyboard.addEventListener("click", handleKeyboardClick);
