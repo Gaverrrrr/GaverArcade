@@ -1861,7 +1861,8 @@ html.dark {
   --faint: #25292f;
   --line: #3a4048;
   --line-strong: #727b86;
-  --absent: #28313d;
+  --absent: #2e3947;
+  --absent-key: #444e5a;
   --focus: rgba(93, 162, 86, 0.24);
   --unlock-glow: rgba(212, 173, 50, 0.28);
 }
@@ -1878,6 +1879,10 @@ html.dark .topbar {
 
 html.dark .keyboard {
   background: rgba(18, 20, 22, 0.86);
+}
+
+html.dark .key.absent {
+  background: var(--absent-key);
 }
 
 html.dark .key:not(.correct):not(.present):not(.absent) {
