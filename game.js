@@ -182,7 +182,7 @@ function getStoredTheme() {
 
 function applyTheme(theme) {
   document.documentElement.classList.toggle("dark", theme === "dark");
-  els.themeButton.textContent = theme === "dark" ? "☀" : "☾";
+  els.themeButton.textContent = theme === "dark" ? "☀︎" : "☾︎";
   els.themeButton.setAttribute(
     "aria-label",
     theme === "dark" ? "切换到浅色模式" : "切换到深色模式",

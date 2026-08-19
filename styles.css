@@ -350,7 +350,7 @@ button {
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr) 82px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   width: 100%;
   min-height: 54px;
